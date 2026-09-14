@@ -20,9 +20,14 @@
  * 已知限制（仿真环境）：
  *   任务代码内不得调用可能阻塞的 Win32 API（如 Sleep、阻塞式磁盘 I/O），
  *   否则可能与抢占式挂起相互干扰。此为教学/调试用途的合理约束。
+ *   唯一例外是日志输出后端（port_rt.c）：它直接写宿主 stdout，重定向到
+ *   管道且读端不消费时会阻塞，详见 docs/design/kernel.md 第 6.5 节。
+ *
+ * 本文件与 port_rt.c 一起构成本里程碑唯一允许使用宿主库/API 的一层（FR-LIB-006）。
  * ============================================================ */
 
 #include "catos/catos.h"
+#include "catos_backend.h"
 
 #include <windows.h>
 
@@ -30,13 +35,21 @@
 #include <intrin.h>
 #endif
 
+#include "port_internal.h"
+
 /* ---------------- 内核锁 ---------------- */
 
 static CRITICAL_SECTION g_kernel_cs;
 
 void catos_port_init(void)
 {
-    InitializeCriticalSectionAndSpinCount(&g_kernel_cs, 4000);
+    /* 内核锁创建失败（资源不足）则内核无法安全运行：进入 panic 通道停机。
+     * panic 自身不加锁，因此在锁不可用时也能用。 */
+    if (!InitializeCriticalSectionAndSpinCount(&g_kernel_cs, 4000))
+        catos_port_panic("PANIC\r\n  catos_port_init: kernel lock init failed\r\n");
+
+    /* 运行库后端（日志锁、输出句柄），见 port_rt.c */
+    port_rt_init();
 }
 
 void catos_port_critical_enter(void)

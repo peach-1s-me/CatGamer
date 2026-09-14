@@ -13,21 +13,25 @@
  * 退出码 0 = 全部通过；非 0 = 失败。
  * ============================================================ */
 
+/* 平台无关（FR-LIB-008）：只用 CatOS 公共接口——输出 catos_printf、
+ * 原子 catos_atomic_*、比较 catos_memcmp、退出 catos_exit。
+ * 任何宿主头（<stdio.h> <windows.h> …）都不允许出现。 */
+
 #include "catos/catos.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <windows.h>
+#include "catos/catos_atomic.h"
+#include "catos_string.h"
+#include "catos_stdio.h"
+#include "catos_stdlib.h"
 
 #define LOG_CAP 64
 
-static volatile LONG g_log_len = 0;
-static char          g_log[LOG_CAP];
-static int           g_fail = 0;
+static catos_atomic_t g_log_len = 0;    /* 已写入的字符数（超出 LOG_CAP 后只计数不写） */
+static char           g_log[LOG_CAP];   /* 未以 '\0' 结尾：打印时用 "%.*s" 限定长度 */
+static int            g_fail = 0;
 
 static void logc(char c)
 {
-    LONG i = InterlockedIncrement(&g_log_len) - 1;
+    int32_t i = catos_atomic_inc(&g_log_len) - 1;
     if (i >= 0 && i < LOG_CAP)
         g_log[i] = c;
 }
@@ -35,7 +39,7 @@ static void logc(char c)
 static void expect(int cond, const char *what)
 {
     if (!cond) {
-        printf("  [FAIL] %s\n", what);
+        catos_printf("  [FAIL] %s\n", what);
         g_fail = 1;
     }
 }
@@ -90,7 +94,7 @@ static void coordinator(void *arg)
     /* 阶段 1：验证 yield 轮转（Y1/Y2 已自行完成并挂起） */
     while (g_log_len < 4)
         catos_sched_yield();
-    expect(g_log_len == 4 && memcmp(g_log, "ABab", 4) == 0,
+    expect(g_log_len == 4 && catos_memcmp(g_log, "ABab", 4) == 0,
            "tB: same-priority yield round-robin 'ABab'");
 
     /* 阶段 2：依次恢复高/中/低任务，验证优先级顺序 "HML" */
@@ -99,7 +103,7 @@ static void coordinator(void *arg)
     catos_task_resume(g_l);
     while (g_log_len < 7)
         catos_sched_yield();
-    expect(g_log_len == 7 && memcmp(g_log + 4, "HML", 3) == 0,
+    expect(g_log_len == 7 && catos_memcmp(g_log + 4, "HML", 3) == 0,
            "tA: priority order 'HML' via suspend/resume");
 
     /* 阶段 3：删除一个已挂起任务 + 拒绝删除自己 */
@@ -116,9 +120,11 @@ static void coordinator(void *arg)
     expect(g_log[7] == 'D', "tC: dynamically created task ran and logged 'D'");
     expect(catos_task_delete(dyn) == CATOS_OK, "tC: deleting terminated task");
 
-    printf("  [%s] log = %.*s\n", g_fail ? "FAIL" : "PASS", (int)g_log_len, g_log);
-    fflush(stdout);
-    exit(g_fail ? 1 : 0);
+    /* 精度必须钳到 LOG_CAP：g_log_len 是"写入计数"，缓冲区只有 LOG_CAP 字节
+     * 且不以 '\0' 结尾，直接传 g_log_len 会让格式化函数越界读取。 */
+    catos_printf("  [%s] log = %.*s\n", g_fail ? "FAIL" : "PASS",
+                 (g_log_len < LOG_CAP) ? (int)g_log_len : LOG_CAP, g_log);
+    catos_exit(g_fail ? 1 : 0);
 }
 
 int main(void)
@@ -127,7 +133,7 @@ int main(void)
     catos_err_t err;
 
     if (catos_kernel_init() != CATOS_OK) {
-        printf("kernel init failed\n");
+        catos_printf("kernel init failed\n");
         return 1;
     }
 

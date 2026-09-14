@@ -13,7 +13,7 @@
  * ============================================================ */
 
 #include "catos_internal.h"
-#include <string.h>
+#include "catos_string.h"
 
 /* ---- 名字复制 ---- */
 
@@ -31,7 +31,7 @@ catos_err_t catos_mutex_init(catos_mutex_t *m, const char *name)
     if (m == NULL)
         return CATOS_E_INVAL;
 
-    memset(m, 0, sizeof(*m));
+    catos_memset(m, 0, sizeof(*m));
     mutex_name_copy(m, name);
     m->owner      = NULL;
     m->nest_count = 0;

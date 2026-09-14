@@ -6,6 +6,12 @@
  *
  * 仅供 kernel/src/ 下的源文件使用，绝不对外暴露。
  * 本文件之外的核心/移植边界是 kernel/include/catos/catos_port.h。
+ *
+ * 头文件白名单（FR-LIB-002）：核心层只允许包含编译器提供的独立环境头
+ * （<stdint.h> <stddef.h> <stdbool.h> <limits.h> <float.h> <stdarg.h> <iso646.h>）、
+ * CatOS 公共头（"catos/catos.h"）与运行库头（"catos_string.h" 等）。
+ * 禁止包含宿主头（<string.h> <stdio.h> <windows.h> …）：字符串/内存操作用
+ * 运行库的 catos_mem* / catos_str*；输出用 catos_printf。
  * ============================================================ */
 
 #include "catos/catos.h"

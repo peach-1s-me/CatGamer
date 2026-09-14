@@ -14,31 +14,7 @@
  * ============================================================ */
 
 #include "catos/catos.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <windows.h>
-
-#define LOG_CAP 64
-
-static volatile LONG g_log_len = 0;
-static char          g_log[LOG_CAP];
-static int           g_fail = 0;
-
-static void logc(char c)
-{
-    LONG i = InterlockedIncrement(&g_log_len) - 1;
-    if (i >= 0 && i < LOG_CAP)
-        g_log[i] = c;
-}
-
-static void expect(int cond, const char *what)
-{
-    if (!cond) {
-        printf("  [FAIL] %s\n", what);
-        g_fail = 1;
-    }
-}
+#include "test_common.h"
 
 /* ---- 测试 B：同优先级 yield 轮转 ----
  * 期望日志 "ABab"：两个同优先级任务通过 yield 交替运行。 */
@@ -90,7 +66,7 @@ static void coordinator(void *arg)
     /* 阶段 1：验证 yield 轮转（Y1/Y2 已自行完成并挂起） */
     while (g_log_len < 4)
         catos_sched_yield();
-    expect(g_log_len == 4 && memcmp(g_log, "ABab", 4) == 0,
+    expect(g_log_len == 4 && catos_memcmp(g_log, "ABab", 4) == 0,
            "tB: same-priority yield round-robin 'ABab'");
 
     /* 阶段 2：依次恢复高/中/低任务，验证优先级顺序 "HML" */
@@ -99,7 +75,7 @@ static void coordinator(void *arg)
     catos_task_resume(g_l);
     while (g_log_len < 7)
         catos_sched_yield();
-    expect(g_log_len == 7 && memcmp(g_log + 4, "HML", 3) == 0,
+    expect(g_log_len == 7 && catos_memcmp(g_log + 4, "HML", 3) == 0,
            "tA: priority order 'HML' via suspend/resume");
 
     /* 阶段 3：删除一个已挂起任务 + 拒绝删除自己 */
@@ -116,9 +92,7 @@ static void coordinator(void *arg)
     expect(g_log[7] == 'D', "tC: dynamically created task ran and logged 'D'");
     expect(catos_task_delete(dyn) == CATOS_OK, "tC: deleting terminated task");
 
-    printf("  [%s] log = %.*s\n", g_fail ? "FAIL" : "PASS", (int)g_log_len, g_log);
-    fflush(stdout);
-    exit(g_fail ? 1 : 0);
+    report_and_exit();
 }
 
 int main(void)
@@ -127,7 +101,7 @@ int main(void)
     catos_err_t err;
 
     if (catos_kernel_init() != CATOS_OK) {
-        printf("kernel init failed\n");
+        catos_printf("kernel init failed\n");
         return 1;
     }
 

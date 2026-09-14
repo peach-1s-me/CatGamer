@@ -1,8 +1,8 @@
 # CatOS 内核设计文档
 
-> 版本：v0.1（M0 里程碑）
-> 对应需求：`docs/requirements.md`（FR-TASK / FR-SCHED / FR-PORT / FR-WIN）
-> 源码：`m0_kernel_skeleton/kernel/`
+> 版本：v0.1（M0 里程碑，M1 与 FR-LIB 整改后同步更新）
+> 对应需求：`docs/requirements.md`（FR-TASK / FR-SCHED / FR-PORT / FR-WIN / FR-LIB）
+> 源码：`m0_kernel_skeleton/`（M1 见 `m1_sched_core/`）
 
 ---
 
@@ -14,17 +14,35 @@
 ├──────────────────────────────────────────────┤
 │ 公共接口 kernel/include/catos/                 │
 │   catos.h catos_task.h catos_sched.h          │
-│   catos_port.h（移植接口契约）catos_config.h   │
+│   catos_atomic.h catos_port.h（移植接口契约）    │
+│   catos_config.h                              │
 ├──────────────────────────────────────────────┤
 │ 内核核心 kernel/src/（平台无关）                │
 │   task.c  ready_queue.c  sched.c  kernel.c    │
 ├──────────────────────────────────────────────┤
+│ 运行库 lib/（平台无关，FR-LIB-003/009）          │
+│   catos_string.h catos_stdio.h catos_stdlib.h │
+│   catos_ctype.h catos_assert.h catos_libcfg.h │
+│   catos_backend.h（运行库后端契约）             │
+├──────────────────────────────────────────────┤
 │ 移植层 kernel/port/<target>/（唯一平台代码）     │
-│   win32/port.c                                │
+│   win32/port.c（任务执行体/锁/切换/tick）        │
+│   win32/port_rt.c（输出后端/panic/退出/原子）    │
 └──────────────────────────────────────────────┘
 ```
 
 **核心隔离规则**（FR-PORT-006）：`kernel/src` 与 `kernel/include/catos` 不含任何平台分支、Win32 API 或汇编；平台差异全部封装在 `kernel/port/<target>/`。核心与移植层之间只通过 `catos_port.h` 声明的接口交互。
+
+**运行库独立性**（FR-LIB）：运行库 `lib/` 与内核核心都以**独立环境**（`-ffreestanding -fno-builtin`）编译，不使用任何宿主库；宿主库/API 只允许出现在移植层。运行库自带 `catos_mem*`/`catos_str*`/`catos_printf`/`catos_exit` 等实现，同时以 ISO 同名符号（`memcpy`/`memset`/…）导出，满足编译器隐式生成的库调用。运行库需要"与外界打交道"的三件事（写出字节、panic 停机、结束应用）通过 `catos_backend.h` 交给移植层：
+
+```
+隔离规则          只允许端口层用宿主库
+应用 apps/ ──┐
+             ├─ 公共接口 ─ 内核核心 ─ 运行库 lib/ ─┐
+             │                     ↑              │
+             └─────────────────────┴── 移植层 ◄───┘
+                        （实现 catos_port.h + catos_backend.h + catos_atomic.h）
+```
 
 ---
 
@@ -154,7 +172,9 @@ typedef struct catos_sched_ops {
 
 ## 5. 移植层接口契约（FR-PORT-001）
 
-见 `kernel/include/catos/catos_port.h`。核心需要的全部平台能力：
+移植层要实现**三份契约**，都只在这里被使用（FR-LIB-006：宿主库只允许出现在移植层内部）：
+
+**5.1 内核契约** —— `kernel/include/catos/catos_port.h`，核心需要的全部平台能力：
 
 | 函数 | 职责 |
 | --- | --- |
@@ -168,7 +188,17 @@ typedef struct catos_sched_ops {
 | `catos_port_start_scheduler` | 启动 tick 源 |
 | `catos_port_ctz` | 取最低置位位（就绪队列选最高优先级） |
 
-移植到新平台只需实现上述接口 + 提供一个调用 `catos_tick()` 的 tick 源。
+**5.2 运行库后端契约** —— `lib/include/catos_backend.h`（运行库"与外界打交道"的三个动作）：
+
+| 函数 | 职责 |
+| --- | --- |
+| `catos_port_log_write` | 写出 len 字节（不翻译换行；一次调用是一个整体，不得与其它调用交错） |
+| `catos_port_panic` | 输出诊断后停机/复位，**不得返回**，且**不得加锁** |
+| `catos_port_exit` | 结束应用：宿主目标→进程退出码；嵌入式→输出结果后停机 |
+
+**5.3 原子操作** —— `kernel/include/catos/catos_atomic.h` 的 `catos_atomic_*`（移植层实现，内核与应用都不得直接用宿主原子内建）。
+
+移植到新平台只需实现上述三份契约 + 提供一个调用 `catos_tick()` 的 tick 源；**应用源码与内核核心一行都不用改**（FR-LIB-008）。
 
 ---
 
@@ -202,7 +232,30 @@ typedef struct catos_sched_ops {
 
 ### 6.4 为什么用线程而不是纤程
 
-纤程（Fiber）方案只能由所属线程主动 `SwitchToFiber`，无法被其它线程在任意指令处强制切换——即无法实现真正的抢占。线程 + `SuspendThread` 能实现真实抢占与真实时间节奏（tick 周期驱动），与嵌入式行为等价。
+纤程（Fiber）方案只能由所属线程主动 `SwitchToFiber`，无法被其它线程在任何指令处强制切换——即无法实现真正的抢占。线程 + `SuspendThread` 能实现真实抢占与真实时间节奏（tick 周期驱动），与嵌入式行为等价。
+
+### 6.5 移植层宿主依赖清单与输出后端（FR-LIB-006/009、FR-PORT-007）
+
+**宿主依赖全部落在两个文件里**：`kernel/port/win32/port.c` 与 `kernel/port/win32/port_rt.c`。`tools/check_libc.sh` 的第 [5/6] 项会打印这份清单（当前：25 个 Win32 导入 + 3 个 CatOS 符号）：
+
+| 类别 | 内容 | 用在哪 |
+| --- | --- | --- |
+| 线程与切换 | `CreateThread` `ResumeThread` `SuspendThread` `SetThreadPriority` `CloseHandle` `DuplicateHandle` `GetCurrentThread` `GetCurrentProcess` | 任务执行体与抢占切换 |
+| 同步 | `InitializeCriticalSectionAndSpinCount` `EnterCriticalSection` `LeaveCriticalSection` | 内核锁、日志锁 |
+| 时钟 | `CreateWaitableTimerA` `SetWaitableTimer` `WaitForSingleObject` | tick 源 |
+| 原子 | `InterlockedIncrement/Decrement/ExchangeAdd/Exchange/CompareExchange` | `catos_atomic_*` |
+| 输出 | `GetStdHandle` `WriteFile` `OutputDebugStringA` | 日志后端、panic 诊断 |
+| 进程结束 | `ExitProcess` `DebugBreak` `IsDebuggerPresent` | `catos_exit` / panic |
+
+**输出后端（`catos_port_log_write`）的三个约定**：
+
+1. **不做换行翻译**：写进去什么字节就输出什么字节。应用输出里的 `\n` 就是 `\n`（要 CRLF 请应用自己写 `"\r\n"`）；系统消息（如 panic）的换行由 `CATOS_CFG_NL` 决定（`lib/include/catos_libcfg.h`）。这样管道/文件、Linux、串口上的字节完全一致。
+2. **单次调用原子**：整段缓冲在移植层日志锁（`g_log_cs`）内写完，不会被其它任务的输出撕开；运行库的 `catos_printf` 保证"一次调用 = 一次 `catos_port_log_write`"。因此应用**不需要 fflush**（`catos_fflush()` 是空操作）。
+3. **用 `WriteFile` 而非 `WriteConsoleA`**：后者在 stdout 被重定向到管道/文件时失败，而 CI 捕获输出、`> 文件` 都依赖重定向。
+
+**已知限制**：写 stdout 可能阻塞（管道缓冲满且读端不消费时），此时持日志锁的任务会被长时间挂起，其它任务的日志随之阻塞。这是 6.3 节"任务内不得调用阻塞 Win32 API"的**唯一例外**（内核与测试必需），运行时请保证 stdout 被正常消费（终端或 `> 文件`）。后续串口后端将改为"发送环形缓冲 + 由空闲任务/tick 排空"以消除该阻塞——那时只需改移植层，应用与内核 API 不变。
+
+**与整改前的差异**：原先应用用 CRT 的 `printf`，Windows 文本模式会把 `\n` 翻成 CRLF（重定向时也是）。现在输出原样写出（LF），因此重定向后的输出每行少一个 `\r`；这是"跨平台字节一致"的预期结果，各里程碑 README 的实测结果里已按新行为记录。
 
 ---
 
@@ -218,7 +271,8 @@ typedef struct catos_sched_ops {
 | 里程碑 | 内容 | 状态 |
 | --- | --- | --- |
 | M0 | 任务管理、就绪队列、固定优先级最小调度、空闲任务、Windows 移植 | ✅ |
-| M1 | 可插拔调度器 `sched_ops`、优先级继承互斥量（FR-PRIO）、BLOCKED 状态 | ✅ 本里程碑 |
+| M1 | 可插拔调度器 `sched_ops`、优先级继承互斥量（FR-PRIO）、BLOCKED 状态 | ✅ |
+| M0/M1 整改 | FR-LIB：新增运行库 `lib/`（`catos_*`，与 ISO 头一一对应）、`catos_atomic.h`、移植层输出/panic/退出后端；内核与应用去掉全部宿主依赖；`tools/check_libc.sh` 全项通过 | ✅ 已就地整改 |
 | M2 | 信号量/消息队列/事件、tick 延时、软定时器 | 待做 |
 | M3 | 周期调度（FR-SCHED-002） | 待做 |
 | M4 | HAL / 设备驱动框架 | 待做 |

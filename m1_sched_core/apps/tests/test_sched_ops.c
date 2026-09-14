@@ -14,7 +14,6 @@
 
 #include "catos/catos.h"
 #include "test_common.h"
-#include <stdlib.h>
 
 /* ---- 应用层轮转调度策略 ---- */
 
@@ -76,7 +75,7 @@ static const catos_sched_ops_t rr_ops = {
 
 /* ---- 测试任务 ---- */
 
-static volatile LONG g_done;   /* 完成的任务数 */
+static catos_atomic_t g_done;   /* 完成的任务数（原子） */
 
 static void task_round(void *arg)
 {
@@ -87,7 +86,7 @@ static void task_round(void *arg)
         logc(c);
         catos_sched_yield();   /* 让出 CPU：轮转策略下轮到下一个任务 */
     }
-    InterlockedIncrement(&g_done);
+    catos_atomic_inc(&g_done);
     catos_task_exit();
 }
 
@@ -98,12 +97,10 @@ static void checker(void *arg)
         catos_sched_yield();
 
     /* 轮转：A B C A B C A B C（按创建顺序，忽略优先级） */
-    expect(g_log_len == 9 && memcmp(g_log, "ABCABCABC", 9) == 0,
+    expect(g_log_len == 9 && catos_memcmp(g_log, "ABCABCABC", 9) == 0,
            "rr: round-robin order 'ABCABCABC' (priority ignored)");
 
-    printf("  [%s] log = %.*s\n", g_fail ? "FAIL" : "PASS", (int)g_log_len, g_log);
-    fflush(stdout);
-    exit(g_fail ? 1 : 0);
+    report_and_exit();
 }
 
 int main(void)
@@ -111,12 +108,12 @@ int main(void)
     catos_task_t *t;
 
     if (catos_kernel_init() != CATOS_OK) {
-        printf("kernel init failed\n");
+        catos_printf("kernel init failed\n");
         return 1;
     }
     /* 切换为轮转策略（须在创建用户任务之前） */
     if (catos_sched_select(&rr_ops) != CATOS_OK) {
-        printf("sched_select failed\n");
+        catos_printf("sched_select failed\n");
         return 1;
     }
 

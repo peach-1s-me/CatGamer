@@ -11,7 +11,7 @@
  * ============================================================ */
 
 #include "catos_internal.h"
-#include <string.h>
+#include "catos_string.h"
 
 /* 静态 TCB 池 */
 static catos_task_t g_task_pool[CATOS_CFG_MAX_TASKS];
@@ -25,7 +25,7 @@ bool g_sched_started = false;
 
 void ktask_init_pool(void)
 {
-    memset(g_task_pool_used, 0, sizeof(g_task_pool_used));
+    catos_memset(g_task_pool_used, 0, sizeof(g_task_pool_used));
 }
 
 /* 从静态池分配一个 TCB 并初始化（不进入就绪队列，不创建底层执行体） */
@@ -45,7 +45,7 @@ catos_task_t *ktask_alloc(const char *name, int prio, size_t stack_size,
     if (t == NULL)
         return NULL;
 
-    memset(t, 0, sizeof(*t));
+    catos_memset(t, 0, sizeof(*t));
 
     /* 有界复制任务名，避免依赖 strcpy */
     for (i = 0; i < CATOS_CFG_TASK_NAME_LEN - 1 && name != NULL && name[i] != '\0'; i++)

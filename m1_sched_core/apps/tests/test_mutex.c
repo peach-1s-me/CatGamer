@@ -15,7 +15,6 @@
 
 #include "catos/catos.h"
 #include "test_common.h"
-#include <stdlib.h>
 
 static catos_mutex_t g_m2;                       /* t2 互斥量 */
 static catos_mutex_t g_m3_a, g_m3_b;             /* t3 两个互斥量 */
@@ -23,8 +22,8 @@ static catos_mutex_t g_m3_a, g_m3_b;             /* t3 两个互斥量 */
 static catos_task_t *g_t2_low, *g_t2_med, *g_t2_high;
 static catos_task_t *g_t3_base, *g_t3_low, *g_t3_high;
 
-static volatile LONG g_t2_done;                  /* t2 任务退出计数 */
-static volatile LONG g_t3_done;                  /* t3 任务退出计数 */
+static catos_atomic_t g_t2_done;                 /* t2 任务退出计数（原子） */
+static catos_atomic_t g_t3_done;                 /* t3 任务退出计数（原子） */
 static volatile int  g_pip_ok;                   /* t2：Low 被提升到 1 */
 static volatile int  g_chain_ok;                 /* t3：Base 被链式提升到 1 */
 
@@ -53,7 +52,7 @@ static void t2_low(void *arg)
 
     catos_mutex_unlock(&g_m2);            /* 释放 -> 所有权转移给 High */
     logc('E');
-    InterlockedIncrement(&g_t2_done);
+    catos_atomic_inc(&g_t2_done);
     catos_task_exit();
 }
 
@@ -66,7 +65,7 @@ static void t2_med(void *arg)
 
     long_work();                          /* 长计算：无 PIP 时在此饿死 Low */
     logc('m');
-    InterlockedIncrement(&g_t2_done);
+    catos_atomic_inc(&g_t2_done);
     catos_task_exit();
 }
 
@@ -77,7 +76,7 @@ static void t2_high(void *arg)
     catos_mutex_lock(&g_m2);              /* 阻塞；Low 被提升到 1 */
     logc('H');                            /* 获得互斥量 */
     catos_mutex_unlock(&g_m2);
-    InterlockedIncrement(&g_t2_done);
+    catos_atomic_inc(&g_t2_done);
     catos_task_exit();
 }
 
@@ -95,7 +94,7 @@ static void t3_base(void *arg)
 
     catos_mutex_unlock(&g_m3_b);          /* 转移给 Low */
     logc('b');
-    InterlockedIncrement(&g_t3_done);
+    catos_atomic_inc(&g_t3_done);
     catos_task_exit();
 }
 
@@ -111,7 +110,7 @@ static void t3_low(void *arg)
     catos_mutex_unlock(&g_m3_a);          /* 转移 M1 给 High */
     logc('x');
     catos_mutex_unlock(&g_m3_b);
-    InterlockedIncrement(&g_t3_done);
+    catos_atomic_inc(&g_t3_done);
     catos_task_exit();
 }
 
@@ -122,7 +121,7 @@ static void t3_high(void *arg)
     catos_mutex_lock(&g_m3_a);            /* M1 被 Low 持有 -> High 阻塞；链式提升 Base 到 1 */
     logc('H');                            /* 获得 M1 */
     catos_mutex_unlock(&g_m3_a);
-    InterlockedIncrement(&g_t3_done);
+    catos_atomic_inc(&g_t3_done);
     catos_task_exit();
 }
 
@@ -148,7 +147,7 @@ static void coordinator(void *arg)
     while (g_t2_done < 3)
         catos_sched_yield();
     expect(g_pip_ok, "t2: Low saw eff_prio==1 while High blocked on its mutex (PIP)");
-    expect(g_log_len == 6 && memcmp(g_log, "LMhHmE", 6) == 0,
+    expect(g_log_len == 6 && catos_memcmp(g_log, "LMhHmE", 6) == 0,
            "t2: order LMhHmE ('H' before 'm' proves Low preempted Medium via PIP)");
 
     /* ---- t3：链式继承 ---- */
@@ -156,12 +155,10 @@ static void coordinator(void *arg)
     while (g_t3_done < 3)
         catos_sched_yield();
     expect(g_chain_ok, "t3: Base saw eff_prio==1 (chain High->Low->Base)");
-    expect(g_log_len == 13 && memcmp(g_log + 6, "BLhlHxb", 7) == 0,
+    expect(g_log_len == 13 && catos_memcmp(g_log + 6, "BLhlHxb", 7) == 0,
            "t3: order BLhlHxb (Low passed M2 before High got M1)");
 
-    printf("  [%s] log = %.*s\n", g_fail ? "FAIL" : "PASS", (int)g_log_len, g_log);
-    fflush(stdout);
-    exit(g_fail ? 1 : 0);
+    report_and_exit();
 }
 
 int main(void)
@@ -169,7 +166,7 @@ int main(void)
     catos_task_t *c;
 
     if (catos_kernel_init() != CATOS_OK) {
-        printf("kernel init failed\n");
+        catos_printf("kernel init failed\n");
         return 1;
     }
     catos_mutex_init(&g_m2,   "m2");
