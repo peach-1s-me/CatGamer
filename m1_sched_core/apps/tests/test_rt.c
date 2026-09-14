@@ -183,7 +183,9 @@ int main(void)
     test_atomic();
     test_ctype();
 
-    catos_printf("  [%s] 运行库单元测试\n", g_fail ? "FAIL" : "PASS");
+    /* 输出一律用 ASCII：运行库不做编码转换，中文以 UTF-8 字节写出后，
+     * 在 GBK 代码页的 Windows 控制台会显示为乱码（见 catos_stdio.h 的编码说明）。 */
+    catos_printf("  [%s] runtime library unit tests\n", g_fail ? "FAIL" : "PASS");
     catos_exit(g_fail ? 1 : 0);
 
     return 1;   /* 不可达（catos_exit 不返回） */

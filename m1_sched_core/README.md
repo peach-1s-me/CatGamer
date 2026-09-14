@@ -89,7 +89,7 @@ cmake --build build/m1
 | test_sched | `[PASS] log = ABabHMLD` | 重构后 M0 行为不变 |
 | test_mutex | `[PASS] log = LMhHmEBLhlHxb` | 经典反转（`H` 先于 `m`：Low 被提升后抢先于 Medium）+ 链式继承（`BLhlHxb`） |
 | test_sched_ops | `[PASS] log = ABCABCABC` | 应用层轮转策略按创建顺序运行，优先级被忽略 |
-| test_rt | `[PASS] 运行库单元测试` | 运行库自测：`%.*s` 精度上界、`*` 宽度/精度参数不错位、整数精度、截断与返回值、memmove 重叠、原子 CAS 等 |
+| test_rt | `[PASS] runtime library unit tests` | 运行库自测：`%.*s` 精度上界、`*` 宽度/精度参数不错位、整数精度、截断与返回值、memmove 重叠、原子 CAS 等 |
 
 **运行库依赖检查**（FR-LIB-007，在仓库根目录执行）：
 
